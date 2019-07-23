@@ -1,0 +1,125 @@
+CREATE TABLE `provider` ( `id` INT NOT NULL AUTO_INCREMENT , `inn` VARCHAR(12) NOT NULL , `name` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL , PRIMARY KEY (`id`)) ENGINE = InnoDB CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE TABLE `product` ( `id` INT NOT NULL AUTO_INCREMENT , `vendor` INT NOT NULL , `name` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL , `measure_id` INT NOT NULL , PRIMARY KEY (`id`)) ENGINE = InnoDB CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE TABLE `measure` ( `id` INT NOT NULL AUTO_INCREMENT , `name` VARCHAR(10) NOT NULL , PRIMARY KEY (`id`)) ENGINE = InnoDB CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE TABLE `provider_assortment` ( `provider_id` INT NOT NULL , `product_id` INT NOT NULL ) ENGINE = InnoDB;
+CREATE TABLE `supply` ( `id` INT NOT NULL AUTO_INCREMENT , `provider_id` INT NOT NULL , `product_id` INT NOT NULL , `quantity` INT NOT NULL , `date` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP , `customer` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL , PRIMARY KEY (`id`)) ENGINE = InnoDB CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci;
+ALTER TABLE `product` ADD FOREIGN KEY (`measure_id`) REFERENCES `measure`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE `provider_assortment` ADD FOREIGN KEY (`provider_id`) REFERENCES `provider`(`id`) ON DELETE CASCADE ON UPDATE CASCADE; ALTER TABLE `provider_assortment` ADD FOREIGN KEY (`product_id`) REFERENCES `product`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE `supply` ADD FOREIGN KEY (`provider_id`) REFERENCES `provider_assortment`(`provider_id`) ON DELETE CASCADE ON UPDATE CASCADE; ALTER TABLE `supply` ADD FOREIGN KEY (`product_id`) REFERENCES `provider_assortment`(`product_id`) ON DELETE CASCADE ON UPDATE CASCADE;
+CREATE UNIQUE INDEX provider_assortment_provider_id_product_id_uindex ON provider_assortment (provider_id, product_id);
+
+create view get_providers_with_products as select provider.id, provider.inn, provider.name,
+(select group_concat(product_id) from provider_assortment where provider_id=provider.id) as product_ids
+from provider;
+
+create view get_products_with_providers as
+  select product.id, product.vendor, product.name, measure.name as measure_name,
+(select group_concat(provider_id) from provider_assortment where product_id=product.id) as provider_ids
+from product
+join measure on product.measure_id = measure.id;
+
+create view get_supplies as
+  select
+supply.id, provider.id as provider_id,
+product.id as product_id,
+quantity, date, customer from supply
+left join product on supply.product_id = product.id
+left join provider on supply.provider_id = provider.id;
+
+delimiter $$
+DROP PROCEDURE IF EXISTS update_provider_products$$
+create procedure update_provider_products (prov_id INT, data_values VARCHAR(255))
+begin
+  delete from provider_assortment where provider_id = prov_id;
+  SET @insert = CONCAT('insert ignore into provider_assortment (provider_id, product_id) VALUES ', data_values);
+  PREPARE upd FROM @insert;
+  EXECUTE upd;
+end$$
+delimiter ;
+
+delimiter $$
+DROP PROCEDURE IF EXISTS update_product_providers$$
+create procedure update_product_providers (prod_id INT, data_values VARCHAR(255))
+begin
+  delete from provider_assortment where product_id = prod_id;
+  SET @insert = CONCAT('insert ignore into provider_assortment (provider_id, product_id) VALUES ', data_values);
+  PREPARE upd FROM @insert;
+  EXECUTE upd;
+end$$
+delimiter ;
+
+delimiter $$
+DROP PROCEDURE IF EXISTS update_supply$$
+create procedure update_supply (supply_id INT, prov_id INT, prod_id INT, quantity INT, customer VARCHAR(255))
+begin
+  update supply set provider_id=prov_id, product_id=prod_id, quantity=quantity, customer=customer where id=supply_id;
+end$$
+delimiter ;
+
+delimiter $$
+DROP PROCEDURE IF EXISTS delete_supply$$
+create procedure delete_supply (supply_id INT)
+begin
+  delete from supply where id=supply_id;
+end$$
+delimiter ;
+
+delimiter $$
+DROP PROCEDURE IF EXISTS add_supply$$
+create procedure add_supply (prov_id INT, prod_id INT, qty INT, cust VARCHAR(255), OUT last_insert_id INT)
+begin
+  insert into supply (provider_id, product_id, quantity, customer) VALUES (prov_id, prod_id, qty, cust);
+  select last_insert_id() into last_insert_id;
+end$$
+delimiter ;
+
+delimiter $$
+DROP PROCEDURE IF EXISTS get_supply_by_id$$
+create procedure get_supply_by_id (IN supply_id INT)
+  select * from supply where id = supply_id;
+delimiter ;
+
+delimiter $$
+DROP PROCEDURE IF EXISTS search_supply$$
+create procedure search_supply(prod_id INT, prov_id INT, supply_date_start DATETIME, supply_date_end DATETIME, supply_customer VARCHAR(255))
+begin
+  DECLARE need_and BOOLEAN DEFAULT false;
+
+  SET @search = 'select * from supply where ';
+  if (prod_id != 0) then
+    SET @search = CONCAT(@search, 'product_id = ', prod_id);
+    SET need_and = true;
+  end if;
+
+  if (prov_id != 0) then
+    if (need_and = true) then
+      SET @search = CONCAT(@search, ' AND ');
+    end if;
+    SET @search = CONCAT(@search, 'provider_id = ', prov_id);
+    SET need_and = true;
+  end if;
+
+  if (supply_date_start != '1000-01-01 00:00:00') then
+    if (need_and = true) then
+      SET @search = CONCAT(@search, ' AND ');
+    end if;
+    SET @search = CONCAT(@search, 'date between \'', supply_date_start, '\' and \'', supply_date_end, '\'');
+    SET need_and = true;
+  end if;
+
+  if (supply_customer != '') then
+    if (need_and = true) then
+      SET @search = CONCAT(@search, ' AND ');
+    end if;
+    SET @search = CONCAT(@search, 'customer like \'%', supply_customer, '%\'');
+    SET need_and = true;
+  end if;
+
+  if (need_and = false) then
+    SET @search = 'select * from supply';
+  end if;
+
+  PREPARE slt FROM @search;
+  EXECUTE slt;
+end$$
+delimiter ;
